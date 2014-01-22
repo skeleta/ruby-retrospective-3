@@ -1,109 +1,57 @@
 module Asm
   module Instructions
-    def mov(register, value)
-      add_instruction
-      proc = Proc.new { |actual_value| @registers[register] = actual_value }
-      @operations << [value, proc, :instruction]
-    end
 
-    def inc(register, value=1)
-      add_instruction
-      proc = Proc.new { |actual_value| @registers[register] += actual_value }
-      @operations << [value, proc, :instruction]
-    end
+    operations = {
+      mov: proc { |regs, register, value|   regs[register] = value },
+      inc: proc { |regs, register, value=1| regs[register] += value },
+      dec: proc { |regs, register, value=1| regs[register] -= value },
+      cmp: proc { |regs, register, value|   regs[:cmp] = (regs[register] <=> value) },
+      jmp: proc { |regs| true },
+      je:  proc { |regs| regs[:cmp] == 0 },
+      jne: proc { |regs| regs[:cmp] != 0 },
+      jl:  proc { |regs| regs[:cmp] < 0  },
+      jle: proc { |regs| regs[:cmp] <= 0 },
+      jg:  proc { |regs| regs[:cmp] > 0  },
+      jge: proc { |regs| regs[:cmp] >= 0 },
+    }
 
-    def dec(register, value=1)
-      add_instruction
-      proc = Proc.new { |actual_value| @registers[register] -= actual_value }
-      @operations << [value, proc, :instruction]
-    end
-
-    def cmp(register, value)
-      add_instruction
-      proc = Proc.new { |actual_value| @cmp_value = @registers[register] - actual_value }
-      @operations << [value, proc, :instruction]
-    end
-
-    def self.add_instruction
-      @pointer[@operations.length] = @instructions_number
-      @instructions_number += 1
+    operations.each do |operation_name, operation|
+      define_method operation_name do |*args|
+        @operations << [operation, @registers, operation_name, args]
+      end
     end
 
     def label(label)
-      @labels[label] = @instructions_number
-    end
-  end
-
-  module Jumps
-    def add_instruction
-      @pointer[@operations.length] = @instructions_number
-      @instructions_number += 1
-    end
-
-    def jmp(where)
-      add_instruction
-      @operations << where
-    end
-
-    def je(where)
-      add_instruction
-      @operations << [where, Proc.new { @cmp_value == 0}]
-    end
-
-    def jne(where)
-      add_instruction
-      @operations << [where, Proc.new { @cmp_value != 0}]
-    end
-
-    def jl(where)
-      add_instruction
-      @operations << [where, Proc.new { @cmp_value < 0}]
-    end
-
-    def jle(where)
-      add_instruction
-      @operations << [where, Proc.new { @cmp_value <= 0}]
-    end
-
-    def jg(where)
-      add_instruction
-      @operations << [where, Proc.new { @cmp_value > 0}]
-    end
-
-    def jge(where)
-      add_instruction
-      @operations << [where, Proc.new { @cmp_value >= 0}]
+      @labels[label] = @operations.length
     end
   end
 
   class CentralProcessingUnit
 
     include Instructions
-    include Jumps
 
     def initialize
-      @instructions_number = 0
       @operations = []
-      @pointer = {}
       @labels = {}
-      @cmp_value = 0
-      @registers = {ax: 0, bx: 0, cx: 0, dx: 0}
+      @registers = {ax: 0, bx: 0, cx: 0, dx: 0, cmp: 0}
     end
 
     def execute_instructions
       index = 0
 
       while index < @operations.length do
-        if @operations[index].is_a? Array and @operations[index].last == :instruction
-          value = calculate_value @operations[index]
-          @operations[index][1].call value
+        # p index
+        if [:mov, :inc, :dec, :cmp].include? @operations[index][2]
+          args = evaluate(@operations[index].last)
+          @operations[index].first.call(@operations[index][1], *args)
           index += 1
         else
           index = jumper(@operations[index], index)
+          # p index
         end
       end
 
-      @registers.values
+      @registers.values[0..-2]
     end
 
     private
@@ -112,30 +60,17 @@ module Asm
       method_name
     end
 
-    def check_index(index)
-      index ? index : @operations.length
-    end
-
-    def conditional_jumper(jump, index)
-      if jump.last.call
-        where = jump.first.is_a?(Symbol) ? @labels[jump.first] : jump.first
-        check_index @pointer.select { |key,value| value == where }.keys.first
+    def evaluate(args)
+      if args.length == 2
+        [args.first, (@registers[args.last] or args.last)]
       else
-        index += 1
+        args
       end
     end
 
     def jumper(jump_operation, index)
-      if jump_operation.is_a? Array
-        conditional_jumper(jump_operation, index)
-      else
-        where = jump_operation.is_a?(Symbol) ? @labels[jump_operation] : jump_operation
-        check_index @pointer.select { |key,value| value == where }.keys.first
-      end
-    end
-
-    def calculate_value(operations)
-      operations[0].is_a?(Symbol) ? @registers[operations[0]] : operations[0]
+      where = (@labels[jump_operation.last.first] or jump_operation.last.first)
+      jump_operation.first.call(jump_operation[1]) ? where : index + 1
     end
   end
 
